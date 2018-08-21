@@ -11,7 +11,7 @@
   "author": "liqiang",
   "license": "MIT",
   "dependencies": {
-    "anyproxy": "^4.0.5",
+    "anyproxy": "^4.0.12",
     "cheerio": "^1.0.0-rc.2",
     "ejs": "^2.5.7",
     "express": "^4.15.4",
@@ -19,8 +19,8 @@
     "json2csv": "^3.11.2",
     "moment": "^2.21.0",
     "mongoose": "^5.0.10",
-    "motime": "^0.0.2",
     "morgan": "^1.8.2",
+    "motime": "^0.0.2",
     "redis": "^2.8.0",
     "request": "^2.83.0",
     "request-promise": "^4.2.2"

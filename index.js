@@ -41,6 +41,7 @@ const proxyServer = new AnyProxy.ProxyServer({
 });
 
 proxyServer.on('ready', () => {
+  log('代理服务器已经启动')
   const ipAddress = ip.address();
   log(`请配置代理: ${ipAddress}:8101`);
 });
@@ -51,6 +52,7 @@ proxyServer.on('error', (e) => {
 
 // 删除redis中对应缓存后再启动
 redis('del', POST_LIST_KEY, PROFILE_LIST_KEY).then(() => {
+  log('redis缓存已经清除，启动代理服务器...')
   proxyServer.start();
 });
 

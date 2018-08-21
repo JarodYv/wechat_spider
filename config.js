@@ -51,18 +51,20 @@ const config = {
       // 跳转指文章页跳至下一个文章页，不能文章页和公众号历史页互相跳转
       disable: false,
       // 跳转时间间隔，单位秒
-      jumpInterval: 2,
+      jumpInterval: 10,
+      // 跳转随机间隔，实际跳转间隔 = jumpInterval + Random(jumpRandom)
+      jumpRandom: 10,
 
       // 跳转文章发布时间范围
       minTime: new Date('2018-1-1'),
       maxTime: new Date('2018-7-1'),
 
       // 已经抓取过的文章是否需要再次抓取
-      isCrawlExist: false,
+      isCrawlExist: true,
       // 如果上面设置为 true，此项可控制再次重复抓取文章的时间间隔
       // updateNumAt - publishAt < crawlExistInterval => 抓取
-      // 默认 3 天，数据已趋于稳定
-      crawlExistInterval: 1000 * 60 * 60 * 24 * 3,
+      // 默认 1 天，数据已趋于稳定
+      crawlExistInterval: 1000 * 60 * 60 * 24,
 
       // 抓取公众号 biz 范围 [string]
       // 为空表示不限制范围
@@ -79,7 +81,7 @@ const config = {
     profile: {
       // 是否关闭自动跳转页面的功能
       // 跳转不能文章页和公众号历史页互相跳转
-      disable: false,
+      disable: true,
       // 跳转时间间隔，单位秒
       jumpInterval: 5,
 
@@ -97,12 +99,12 @@ const config = {
     },
 
     // 功能：是否抓取评论
-    isCrawlComments: true,
+    isCrawlComments: false,
 
     // 优化项：是否替换掉所有的图片请求
-    isReplaceImg: false,
+    isReplaceImg: true,
     // 优化项：是否替换手机上显示的正文内容
-    isReplacePostBody: false,
+    isReplacePostBody: true,
   },
 
 };

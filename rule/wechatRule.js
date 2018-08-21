@@ -23,9 +23,14 @@ const {
   profile: profileConfig,
 } = ruleConfig;
 
+/**
+ * 获取文章阅读数和点赞数
+ * @param {ctx} 网络请求的上下文 
+ */
 const getReadAndLikeNum = async function(ctx) {
   const { req, res } = ctx;
   const link = req.url;
+  // 判断是否是获取阅读数的请求
   if (!/mp\/getappmsgext/.test(link)) return;
 
   try {
@@ -42,14 +47,23 @@ const getReadAndLikeNum = async function(ctx) {
       obj[key] = decodeURIComponent(value);
       return obj;
     }, {});
-    const { __biz, mid, idx } = reqObj;
+    const { __biz, mid, idx } = reqObj;// 从请求链接中解析出__biz, mid, idx
     const [msgBiz, msgMid, msgIdx] = [__biz, mid, idx];
-
+    const now = new Date()
+    
+    // 更新阅读数和点赞数
     const post = await models.Post.findOneAndUpdate(
       { msgBiz, msgMid, msgIdx },
-      { readNum, likeNum, updateNumAt: new Date() },
+      { readNum, likeNum, updateNumAt: now },
       { new: true, upsert: true }
     );
+    // 阅读数点赞数存入监控表
+    await models.Monitor.create({
+      postId: post._id,
+      updateAt: now,
+      readNum: readNum,
+      likeNum: likeNum,
+    });
     const { id, title } = post;
     if (title) {
       log('文章标题:',title);
@@ -69,6 +83,11 @@ const getReadAndLikeNum = async function(ctx) {
   }
 };
 
+/**
+ * 获取文章基础信息
+ * 
+ * @param {ctx} ctx 网络请求的上下文
+ */
 const getPostBasicInfo = async function(ctx) {
   if (!isPostPage(ctx)) return;
 
@@ -76,6 +95,7 @@ const getPostBasicInfo = async function(ctx) {
   const link = req.url;
   const body = res.response.body.toString();
 
+  // 从链接中解析出__biz, mid, idx
   const urlObj = url.parse(link, true);
   const { query } = urlObj;
   const { __biz, mid, idx } = query;
@@ -85,16 +105,15 @@ const getPostBasicInfo = async function(ctx) {
   if (body.indexOf('global_error_msg') > -1 || body.indexOf('icon_msg warn') > -1) {
     await models.Post.findOneAndUpdate(
       { msgBiz, msgMid, msgIdx },
-      { isFail: true },
+      { isFail: true }, // 标记文章以失效
       { upsert: true }
     );
     return;
   }
 
-
-  // 若数据库中不存在此篇文章 则更新基础信息
+  // 若数据库中不存在此篇文章，则更新基础信息
   await models.Post.findOne({ msgBiz, msgMid, msgIdx }).then(post => {
-    if (post && post.title && post.link && post.wechatId) return;
+    if (post && post.title && post.link && post.wechatId) return; // 已经存在，则不操作
 
     const getTarget = regexp => {
       let target;
@@ -119,13 +138,14 @@ const getPostBasicInfo = async function(ctx) {
       );
     }
 
+    // 解析文章标题、发布时间、原文链接、摘要等基础信息
     const title = getTarget(/var msg_title = "(.+?)";/);
     let publishAt = getTarget(/var ct = "(\d+)";/);
     if (publishAt) publishAt = new Date(parseInt(publishAt) * 1000);
     const sourceUrl = getTarget(/var msg_source_url = '(.*?)';/);
     const cover = getTarget(/var msg_cdn_url = "(.+?)";/);
     const digest = getTarget(/var msg_desc = "(.+?)";/);
-
+    // 更新上述基础信息
     return models.Post.findOneAndUpdate(
       { msgBiz, msgMid, msgIdx },
       { title, link, publishAt, sourceUrl, cover, digest, wechatId },
@@ -152,6 +172,11 @@ const getPostBasicInfo = async function(ctx) {
 
 };
 
+/**
+ * 向文章页面注入代码，发起中间人攻击，自动跳转到下一篇文章
+ * 
+ * @param {*} 网络请求的上下文 
+ */
 const handlePostHtml = async function(ctx) {
   if (!isPostPage(ctx)) return;
 
@@ -160,7 +185,7 @@ const handlePostHtml = async function(ctx) {
 
   // 替换显示在手机上的正文 加速网络
   if (isReplacePostBody) {
-    const len = await redis('llen', POST_LIST_KEY);
+    const len = await redis('llen', POST_LIST_KEY);// 获取文章队列长度
     body.replace(/<div class="rich_media_content " lang=="en" id="js_content">((\s|\S)+?)<\/div>\s+?<script nonce=/, (_, content) => {
       if (content) body = body.replace(content, `剩余文章抓取长度: ${len}`);
     });
@@ -173,7 +198,8 @@ const handlePostHtml = async function(ctx) {
       log('所有文章已经抓取完毕');
       log();
     } else {
-      const insertJsStr = '<meta http-equiv="refresh" content="' + pageConfig.jumpInterval + ';url=' + nextLink + '" />';
+      const interval = pageConfig.jumpInterval + Math.ceil(Math.random() * pageConfig.jumpRandom); // 跳转间隔
+      const insertJsStr = '<meta http-equiv="refresh" content="' + interval + ';url=' + nextLink + '" />';
       body = body.replace('</title>', '</title>' + insertJsStr);
     }
 
@@ -184,6 +210,11 @@ const handlePostHtml = async function(ctx) {
   };
 };
 
+/**
+ * 获取评论数据
+ * 
+ * @param {*} 网络请求的上下文 
+ */
 const getComments = async function(ctx) {
   if (!isCrawlComments) return;
 
@@ -198,16 +229,19 @@ const getComments = async function(ctx) {
     const comments = data.elected_comment;
     if (!(comments && comments.length)) return;
 
+    // 从链接中解析出__biz, mid, idx
     const urlObj = url.parse(link, true);
     const { query } = urlObj;
     const { __biz, appmsgid, idx } = query;
     const [msgBiz, msgMid, msgIdx] = [__biz, appmsgid, idx];
 
+    // 查找评论对应的文章是否存在
     const postId = await models.Post.findOne({ msgBiz, msgMid, msgIdx }).then(post => {
       if (post) return post._id;
     });
     if (!postId) return;
 
+    // 构造评论数据结构
     const postComments = comments.map(comment => {
       const contentId = comment.content_id;
       const nickName = comment.nick_name;
@@ -238,6 +272,7 @@ const getComments = async function(ctx) {
       };
     });
 
+    // 所有评论写入数据库
     await Promise.all(postComments.map(comment => {
       return models.Comment.findOneAndUpdate(
         { contentId: comment.contentId },
@@ -254,9 +289,15 @@ const getComments = async function(ctx) {
   }
 };
 
+/**
+ * 获取公号基础信息
+ * 
+ * @param {*} 网络请求的上下文 
+ */
 const getProfileBasicInfo = async function(ctx) {
   const { req, res } = ctx;
   const link = req.url;
+  // 链接 https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz=MzI4MjEwNzg3NQ==
   if (!/\/mp\/profile_ext\?action=home&__biz=/.test(link)) return;
 
   const body = res.response.body.toString();
@@ -274,13 +315,14 @@ const getProfileBasicInfo = async function(ctx) {
   const title = getTarget(/var nickname = "(.+?)"/);
   const headimg = getTarget(/var headimg = "(.+?)"/);
 
-  // 更新微信号基础信息
+  // 更新公号基础信息
   await models.Profile.findOneAndUpdate(
     { msgBiz },
     { title, headimg, openHistoryPageAt: new Date() },
     { upsert: true }
   );
 
+  // 匹配是否有历史消息
   const content = getTarget(/var msgList = '(.+)';\n/);
 
   if (!content) return;
@@ -297,6 +339,7 @@ const getProfileBasicInfo = async function(ctx) {
     return str.replace(/&(lt|gt|nbsp|amp|quot);/ig, (_, t) => obj[t]);
   };
 
+  // 解析页面中的文章列表，保存到数据库
   try {
     const data = JSON.parse(escape2Html(content).replace(/\\\//g,'/'));
     const postList = data.list;
@@ -306,6 +349,11 @@ const getProfileBasicInfo = async function(ctx) {
   }
 };
 
+/**
+ * 获取加载的文章列表
+ * 
+ * @param {*} 网络请求的上下文 
+ */
 const getPostList = async function(ctx) {
   const { req, res } = ctx;
   const link = req.url;
@@ -322,6 +370,11 @@ const getPostList = async function(ctx) {
   }
 };
 
+/**
+ * 向公号详情页注入js代码，发起中间人攻击，不断下滑加载历史文章
+ * 
+ * @param {*} 网络请求的上下文 
+ */
 const handleProfileHtml = async function(ctx) {
   const { req, res } = ctx;
   const link = req.url;
@@ -348,12 +401,12 @@ const handleProfileHtml = async function(ctx) {
 
   const scrollInterval = jumpInterval * 1000;
 
-  // 最小时间再减一天 保证抓到的文章一定齐全
+  // 最小时间再减一天，保证抓到的文章一定齐全
   minTime = new Date(minTime).getTime() - 1000 * 60 * 60 * 24;
 
   let body = res.response.body.toString();
 
-  // 根据抓取时间和公众号的抓取结果 判断是否下拉和页面跳转
+  // 根据抓取时间和公众号的抓取结果，判断是否下拉和页面跳转
   const insertJsStr = `<script type="text/javascript">
   (function() {
     window.addEventListener('load', () => {
@@ -398,8 +451,14 @@ const handleProfileHtml = async function(ctx) {
 
 };
 
+/**
+ * 将文章列表保存到数据库
+ * 
+ * @param {*} 文章列表 
+ */
 async function savePostsData(postList) {
   const posts = [];
+  // 从原始数据中解析出文章信息和发布时间
   postList.forEach(post => {
     const appMsg = post.app_msg_ext_info;
     if (!appMsg) return;
@@ -413,24 +472,25 @@ async function savePostsData(postList) {
     });
   });
 
+  // 从文章信息中解析出需要保存的信息
   await Promise.all(posts.map(post => {
     const { appMsg, publishAt } = post;
-    const title = appMsg.title;
-    const link = appMsg.content_url;
+    const title = appMsg.title;       // 标题
+    const link = appMsg.content_url;  // 链接
     if (!(title && link)) return;
-
+    // 通过链接解析出__biz, mid, idx
     const urlObj = url.parse(link, true);
     const { query } = urlObj;
     let { __biz, mid, idx } = query;
     if (!mid) mid = query['amp;mid'];
     if (!idx) idx = query['amp;idx'];
     const [msgBiz, msgMid, msgIdx] = [__biz, mid, idx];
-
-    const [ cover, digest, sourceUrl ] = [ appMsg.cover, appMsg.digest, appMsg.source_url ];
-
+    // 从文章信息中提取封面、摘要和原文链接
+    const [ author, copyright, cover, digest, sourceUrl ] = [ appMsg.author, appMsg.copyright_stat, appMsg.cover, appMsg.digest, appMsg.source_url ];
+    // 保存到数据库
     return models.Post.findOneAndUpdate(
       { msgBiz, msgMid, msgIdx },
-      { title, link, publishAt, cover, digest, sourceUrl },
+      { title, link, author, copyright, publishAt, cover, digest, sourceUrl },
       { new: true, upsert: true }
     ).then(post => {
       log('发布时间:', post.publishAt ? moment(post.publishAt).format('YYYY-MM-DD HH:mm') : '');
@@ -444,16 +504,22 @@ async function savePostsData(postList) {
   });
 }
 
+/**
+ * 判断是否是微信文章链接
+ * 
+ * @param {*} ctx 网络请求上下文
+ */
 function isPostPage(ctx) {
   const { req } = ctx;
   const link = req.url;
-  const isPost = /mp\.weixin\.qq\.com\/s\?__biz/.test(link);
-  const isOldPost = /mp\/appmsg\/show/.test(link);
-  if (!(isPost || isOldPost)) return false;
-  return true;
+  const isPost = /mp\.weixin\.qq\.com\/s\?__biz/.test(link);  // 新式链接
+  const isOldPost = /mp\/appmsg\/show/.test(link);            // 老式链接
+  return (isPost || isOldPost);
 }
 
-// 文章跳转链接放在redis中
+/**
+ * 取下一篇文章跳转链接
+ */ 
 async function getNextPostLink() {
   // 先从redis中取链接
   let nextLink = await redis('lpop', POST_LIST_KEY);
@@ -463,13 +529,15 @@ async function getNextPostLink() {
   const { minTime, maxTime, isCrawlExist, targetBiz, crawlExistInterval } = pageConfig;
 
   const searchQuery = {
-    isFail: null,
-    link: { $exists: true },
-    publishAt: { $gte: minTime, $lte: maxTime }
+    isFail: null, // 没有失效
+    link: { $exists: true },  // 存在链接
+    publishAt: { $gte: minTime, $lte: maxTime } // 发布时间大于等于最小时间，小于等于最大时间
   };
 
+  // 如果设置了公号列表，则msgBiz要在公号列表中
   if (targetBiz && targetBiz.length > 0) searchQuery.msgBiz = { $in: targetBiz };
 
+  // 如果设置为不重复爬取，则更新时间需要为空（没有爬取过）
   if (!isCrawlExist) searchQuery.updateNumAt = null;
 
   const links = await models.Post.find(searchQuery).select('link publishAt updateNumAt').then(posts => {
@@ -481,7 +549,8 @@ async function getNextPostLink() {
     } else {
       return posts.filter(post => {
         const { publishAt, updateNumAt } = post;
-        if (!updateNumAt) return true;
+        if (!updateNumAt) return true; // 没爬取过的肯定要爬取
+        // 爬取过的，看更新时间-发布时间是否超过配置中的爬取间隔
         if (new Date(updateNumAt).getTime() - new Date(publishAt).getTime() > crawlExistInterval) {
           return false;
         } else {
@@ -501,7 +570,9 @@ async function getNextPostLink() {
   return getNextPostLink();
 }
 
-// 公众号跳转链接放在redis中
+/** 
+ * 获取下一个公众号跳转链接
+ */ 
 async function getNextProfileLink() {
   // 先从redis中取链接
   let nextLink = await redis('lpop', PROFILE_LIST_KEY);
@@ -512,13 +583,14 @@ async function getNextProfileLink() {
 
   const searchQuery = {
     $or: [
-      { openHistoryPageAt: { $lte: maxUpdatedAt } },
-      { openHistoryPageAt: { $exists: false } }
+      { openHistoryPageAt: { $lte: maxUpdatedAt } },// 或者上次打开时间小于等于最大打开时间
+      { openHistoryPageAt: { $exists: false } }     // 没有打开
     ]
   };
-
+  // 如果给定了公众号爬取列表，则msgBiz要在给定公号列表中
   if (targetBiz && targetBiz.length > 0) searchQuery.msgBiz = { $in: targetBiz };
 
+  // 查询结果
   const links = await models.Profile.find(searchQuery).select('msgBiz').then(profiles => {
     if (!(profiles && profiles.length > 0)) return [];
     return profiles.map(profile => {
