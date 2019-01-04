@@ -1,5 +1,7 @@
 'use strict';
 
+const merge = require('./utils/merge');
+
 const config = {
 
   // 接口和前端等可视化相关的端口号
@@ -107,26 +109,34 @@ const config = {
     isReplacePostBody: true,
   },
 
+  mp: {
+    cookie: '',
+    token: '',
+  },
+
+  // 添加代理基本认证
+  // 如果开启此配置，则代理时需要先输入用户和密码才可正常运行
+  proxyBasicAuth: {
+    enable: false,
+    user: 'admin',
+    password: '123456',
+  },
+
 };
 
+// docker 配置
+if (process.env.DEPLOY === 'docker') {
+  config.mongodb.db = 'mongodb://mongo:27017/wechat_spider';
+  config.redis.host = 'redis';
+}
 
-// 忽略下面的代码
+
+// 加载自定义的配置
 try {
-  const myConfig = require('./my_config');
-  const fn = (a, b) => {
-    const keys  = Object.keys(a);
-    keys.forEach(k => {
-      if (b.hasOwnProperty(k)) {
-        if (Object.prototype.toString.call(b[k]) === '[object Object]') {
-          fn(a[k], b[k]);
-        } else {
-          a[k] = b[k];
-        }
-      }
-    });
-  };
-  fn(config, myConfig);
+  const myConfig = require('./my_config.json');
+  merge(config, myConfig);
 } catch(e) {
+  // console.log(e);
   // Do nothing
 }
 

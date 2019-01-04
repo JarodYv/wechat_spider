@@ -4,19 +4,23 @@
   "description": "wechat spider by Man-in-the-middle attack",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js --ignore client/",
-    "build": "pm2 start index.js --name=\"wechat_spider\""
+    "start": "DEBUG=ws:* NODE_ENV=production node index.js",
+    "dev": "DEBUG=ws:* nodemon index.js --ignore client/ --ignore test/",
+    "build": "pm2 start index.js --name=\"wechat_spider\"",
+    "mp": "DEBUG=ws:mp* node second/task.js",
+    "test": "mocha --recursive --exit --timeout 10000"
   },
   "author": "liqiang",
   "license": "MIT",
   "dependencies": {
     "anyproxy": "^4.0.12",
     "cheerio": "^1.0.0-rc.2",
+    "debug": "^4.0.1",
     "ejs": "^2.5.7",
     "express": "^4.15.4",
     "ip": "^1.1.5",
     "json2csv": "^3.11.2",
+    "lodash": "^4.17.11",
     "moment": "^2.21.0",
     "mongoose": "^5.0.10",
     "morgan": "^1.8.2",
@@ -26,6 +30,7 @@
     "request-promise": "^4.2.2"
   },
   "devDependencies": {
+    "mocha": "^5.2.0",
     "nodemon": "^1.11.0"
   },
   "repository": {

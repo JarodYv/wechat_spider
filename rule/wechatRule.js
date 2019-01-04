@@ -3,10 +3,10 @@
 const url = require('url');
 const moment = require('moment');
 const models = require('../models');
-const { log } = console;
 const config = require('../config');
 const cheerio = require('cheerio');
 const redis = require('../utils/redis');
+const debug = require('../utils/debug')('wechatRule');
 
 const {
   rule: ruleConfig,
@@ -66,16 +66,16 @@ const getReadAndLikeNum = async function(ctx) {
     });
     const { id, title } = post;
     if (title) {
-      log('文章标题:',title);
+      debug('文章标题:', title);
     } else {
-      log('文章id:',id);
+      debug('文章id:', id);
     }
-    log('阅读量:', readNum, '点赞量:', likeNum);
-    log();
+    debug('阅读量:', readNum, '点赞量:', likeNum);
+    debug();
 
     await redis('llen', POST_LIST_KEY).then(len => {
-      log('剩余文章抓取长度:', len);
-      log();
+      debug('剩余文章抓取长度:', len);
+      debug();
     });
 
   } catch(e) {
@@ -186,7 +186,7 @@ const handlePostHtml = async function(ctx) {
   // 替换显示在手机上的正文 加速网络
   if (isReplacePostBody) {
     const len = await redis('llen', POST_LIST_KEY);// 获取文章队列长度
-    body.replace(/<div class="rich_media_content " lang=="en" id="js_content">((\s|\S)+?)<\/div>\s+?<script nonce=/, (_, content) => {
+    body.replace(/<div class="rich_media_content " id="js_content">((\s|\S)+?)<\/div>\s+?<script nonce=/, (_, content) => {
       if (content) body = body.replace(content, `剩余文章抓取长度: ${len}`);
     });
   }
@@ -195,8 +195,8 @@ const handlePostHtml = async function(ctx) {
   if (!pageConfig.disable) {
     const nextLink = await getNextPostLink();
     if (!nextLink) {
-      log('所有文章已经抓取完毕');
-      log();
+      debug('所有文章已经抓取完毕');
+      debug();
     } else {
       const interval = pageConfig.jumpInterval + Math.ceil(Math.random() * pageConfig.jumpRandom); // 跳转间隔
       const insertJsStr = '<meta http-equiv="refresh" content="' + interval + ';url=' + nextLink + '" />';
@@ -281,8 +281,8 @@ const getComments = async function(ctx) {
       );
     }));
 
-    log(`已抓取${postComments.length}条评论`);
-    log();
+    debug(`已抓取${postComments.length}条评论`);
+    debug();
 
   } catch(e) {
     throw e;
@@ -380,29 +380,21 @@ const handleProfileHtml = async function(ctx) {
   const link = req.url;
   if (!/\/mp\/profile_ext\?action=home&__biz=/.test(link)) return;
 
-  let { disable, minTime, jumpInterval } = profileConfig;
+  let { minTime, jumpInterval } = profileConfig;
 
-  let jumpJsStr = '';
-  if (!disable) {
-    const nextLink = await getNextProfileLink();
-    if (!nextLink) {
-      log('所有公众号已经抓取完毕');
-      log();
-    } else {
-      // 控制页面跳转
-      jumpJsStr = `
-  const refreshMeta = document.createElement('meta');
-  refreshMeta.httpEquiv = 'refresh';
-  refreshMeta.content = '${jumpInterval};url=${nextLink}';
-  document.head.appendChild(refreshMeta);
-`;
-    }
-  }
+  const urlObj = url.parse(link, true);
+  const msgBiz = urlObj.query.__biz;
 
   const scrollInterval = jumpInterval * 1000;
 
-  // 最小时间再减一天，保证抓到的文章一定齐全
+  // 最小时间再减一天 保证抓到的文章一定齐全
+  await models.Profile.logInfo(msgBiz);
   minTime = new Date(minTime).getTime() - 1000 * 60 * 60 * 24;
+  let debugArr = ['minTime before', new Date(minTime)];
+  minTime = await models.ProfilePubRecord.getMinTargetTime(msgBiz, minTime);
+  debugArr = debugArr.concat(['minTime after', minTime]);
+  debug(...debugArr);
+  minTime = minTime.getTime();
 
   let body = res.response.body.toString();
 
@@ -410,31 +402,90 @@ const handleProfileHtml = async function(ctx) {
   const insertJsStr = `<script type="text/javascript">
   (function() {
     window.addEventListener('load', () => {
-      const isScroll = time => {
-        const text = document.body.innerText;
 
-        const tmpArray = text.split(/(.{4})年(.{1,2})月(.{1,2})日/);
-        const tmpStr = tmpArray[tmpArray.length - 1];
-        if (tmpStr.indexOf('已无更多') > -1) return false;
-        if (tmpStr.indexOf('接收更多消息') > -1) return false;
-
-        let minDate;
-        text.replace(/(.{4})年(.{1,2})月(.{1,2})日/g, (match, y, m, d) => {
-          minDate = new Date(y, m - 1, d).getTime();
-          minDateStr = match;
-        });
-        if (minDate && minDate < time) return false;
-        return true;
+      // 跳转至下一个页面的方法
+      const jumpFn = link => {
+        const refreshMeta = document.createElement('meta');
+        refreshMeta.httpEquiv = 'refresh';
+        refreshMeta.content = '0;url=' + link;
+        document.head.appendChild(refreshMeta);
       };
 
+      // 控制跳转
+      const controlJump = () => {
+        setTimeout(() => {
+          fetch('/wx/profiles/next_link')
+            .then(res => res.json())
+            .then(res => {
+              const nextLink = res.data;
+              // 跳转
+              if (nextLink) return jumpFn(nextLink);
+              // 重来
+              controlJump();
+            })
+        }, ${scrollInterval});
+      };
+
+      // 判断是否下拉页面的方法
+      // 0 - 继续下拉
+      // 1 - 已经符合截止日期
+      // 2 - 已经抓至公众号第一篇文章
+      // 3 - 未关注公众号
+      const isScrollFn = time => {
+        let contentText = document.querySelector('.weui-panel').innerText;
+        contentText = contentText.trim();
+        const contentArr = contentText.split('\\n');
+
+        // 最后一行表示目前抓取的状态
+        // 正在加载
+        // 已无更多
+        // 关注公众帐号，接收更多消息
+        const statusStr = contentArr.pop();
+        if (statusStr.indexOf('关注公众帐号，接收更多消息') > -1) {
+          return { status: 3 };
+        }
+
+        // 倒数第二行表示最旧的一篇文章的发布日期
+        let dateStr = contentArr.pop();
+        dateStr = dateStr.trim();
+        dateStr = dateStr.replace(/(\\d{4})年(\\d{1,2})月(\\d{1,2})日/, '$1/$2/$3');
+        const minDate = new Date(dateStr).getTime();
+
+        if (statusStr.indexOf('已无更多') > -1) {
+          return { status: 2, publishAt: minDate };
+        }
+
+        if (minDate < time) return { status: 1 };
+        return { status: 0 };
+      };
+
+      // 控制下拉页面的方法
       const controlScroll = () => {
-        if (isScroll(${minTime})) {
+        const res = isScrollFn(${minTime});
+        const status = res.status;
+        if (status === 0) {
           window.scrollTo(0, document.body.scrollHeight);
           setTimeout(controlScroll, ${scrollInterval});
-        } else {
-          window.scrollTo(0, 0);
-          ${jumpJsStr}
+          return;
         }
+
+        // 告诉后端此公众号已经抓至第一篇文章了
+        if (status === 2) {
+          fetch('/ws/profiles/first_post', {
+            method: 'POST',
+            body: JSON.stringify({
+              link: document.URL,
+              publishAt: res.publishAt,
+            }),
+            headers: new Headers({
+              'Content-Type': 'application/json',
+            })
+          }).then(() => {});
+        }
+
+        // 返回页头然后跳转
+        window.scrollTo(0, 0);
+        controlJump();
       };
 
       controlScroll();
@@ -446,9 +497,6 @@ const handleProfileHtml = async function(ctx) {
   return {
     response: { ...res.response, body }
   };
-
-
-
 };
 
 /**
@@ -473,7 +521,7 @@ async function savePostsData(postList) {
   });
 
   // 从文章信息中解析出需要保存的信息
-  await Promise.all(posts.map(post => {
+  let savedPosts = await Promise.all(posts.map(post => {
     const { appMsg, publishAt } = post;
     const title = appMsg.title;       // 标题
     const link = appMsg.content_url;  // 链接
@@ -492,15 +540,27 @@ async function savePostsData(postList) {
       { msgBiz, msgMid, msgIdx },
       { title, link, author, copyright, publishAt, cover, digest, sourceUrl },
       { new: true, upsert: true }
-    ).then(post => {
-      log('发布时间:', post.publishAt ? moment(post.publishAt).format('YYYY-MM-DD HH:mm') : '');
-      log('文章标题:', post.title, '\n');
-    });
+    );
   }));
 
+  savedPosts = savedPosts.filter(p => p);
+
+  if (savedPosts.length) {
+    await models.Profile.logInfo(savedPosts[0].msgBiz);
+  }
+
+  savedPosts.forEach(post => {
+    debug('发布时间:', post.publishAt ? moment(post.publishAt).format('YYYY-MM-DD HH:mm') : '');
+    debug('文章标题:', post.title);
+  });
+  debug();
+
+  // 记录公众号的发布记录
+  await models.ProfilePubRecord.savePubRecords(savedPosts);
+
   await redis('llen', PROFILE_LIST_KEY).then(len => {
-    log('剩余公众号抓取长度:', len);
-    log();
+    debug('剩余公众号抓取长度:', len);
+    debug();
   });
 }
 
@@ -570,45 +630,6 @@ async function getNextPostLink() {
   return getNextPostLink();
 }
 
-/** 
- * 获取下一个公众号跳转链接
- */ 
-async function getNextProfileLink() {
-  // 先从redis中取链接
-  let nextLink = await redis('lpop', PROFILE_LIST_KEY);
-  if (nextLink) return nextLink;
-
-  // 没有拿到链接则从数据库中查
-  const { maxUpdatedAt, targetBiz } = profileConfig;
-
-  const searchQuery = {
-    $or: [
-      { openHistoryPageAt: { $lte: maxUpdatedAt } },// 或者上次打开时间小于等于最大打开时间
-      { openHistoryPageAt: { $exists: false } }     // 没有打开
-    ]
-  };
-  // 如果给定了公众号爬取列表，则msgBiz要在给定公号列表中
-  if (targetBiz && targetBiz.length > 0) searchQuery.msgBiz = { $in: targetBiz };
-
-  // 查询结果
-  const links = await models.Profile.find(searchQuery).select('msgBiz').then(profiles => {
-    if (!(profiles && profiles.length > 0)) return [];
-    return profiles.map(profile => {
-      const link = `https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz=${profile.msgBiz}&scene=124#wechat_redirect`;
-      return link;
-    });
-  });
-
-  // 如果还查不到 则证明已经抓取完毕了 返回undefined
-  if (links.length === 0) return;
-
-  // 将从数据库中查到的链接放入redis中
-  await redis('rpush', PROFILE_LIST_KEY, links);
-
-  // 再查一次就有下一个链接了
-  return getNextProfileLink();
-}
-
 module.exports = {
   getReadAndLikeNum,
   getPostBasicInfo,
@@ -616,5 +637,5 @@ module.exports = {
   getComments,
   getProfileBasicInfo,
   getPostList,
-  handleProfileHtml
+  handleProfileHtml,
 };

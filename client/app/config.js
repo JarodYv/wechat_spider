@@ -2,9 +2,12 @@
 
 const config = {
   posts: '/api/posts',
+  post: '/api/posts',
   profiles: '/api/profiles',
-  profile: '/api/profile',
-  cates: '/api/categories'
+  profile: '/api/profiles',
+  cates: '/api/categories',
+  cate: '/api/categories',
+  conf: '/api/conf',
 };
 
 export default config;

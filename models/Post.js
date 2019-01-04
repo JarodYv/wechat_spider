@@ -1,7 +1,9 @@
 'use strict';
 
+const moment = require('moment');
 const mongoose = require('mongoose');
 const Schema = mongoose.Schema;
+const debug = require('../utils/debug')('Post');
 
 // 数据结构：文章
 const Post = new Schema({
@@ -39,6 +41,33 @@ Post.index({ publishAt: 1, msgIdx: 1 });
 Post.index({ updateNumAt: -1 });
 Post.index({ updateNumAt: 1 });
 Post.index({ msgBiz: 1, publishAt: 1, msgIdx: 1 });
-Post.index({ msgBiz: 1, msgMid: 1, msgIdx: 1 });
+Post.index({ msgBiz: 1, msgMid: 1, msgIdx: 1 }, { unique: true });
+
+// 插入或更新数据
+// 必须包含 msgBiz, msgMid, msgIdx
+Post.statics.upsert = async function(post) {
+  if (Array.isArray(post)) {
+    return Promise.all(post.map(this.upsert.bind(this)));
+  }
+
+  const { msgBiz, msgMid, msgIdx } = post;
+  if (!msgBiz || !msgMid || !msgIdx) return null;
+  return this.findOneAndUpdate(
+    { msgBiz, msgMid, msgIdx },
+    post,
+    { upsert: true, new: true }
+  );
+};
+
+// debug info
+Post.statics.debugInfo = function(posts) {
+  if (!Array.isArray(posts)) posts = [posts];
+  posts.forEach(post => {
+    debug('id', post.id);
+    debug('标题', post.title);
+    debug('发布时间', post.publishAt ? moment(post.publishAt).format('YYYY-MM-DD HH:mm') : '');
+    debug();
+  });
+};
 
 mongoose.model('Post', Post);

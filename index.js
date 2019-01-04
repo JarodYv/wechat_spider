@@ -5,15 +5,12 @@ const exec = require('child_process').exec;
 const ip = require('ip');
 const { log } = console;
 const config = require('./config');
-const redis = require('./utils/redis');
+const utils = require('./utils');
 
 const {
-  redis: redisConfig,
   anyproxy: anyproxyConfig,
   serverPort,
 } = config;
-
-const { POST_LIST_KEY, PROFILE_LIST_KEY } = redisConfig;
 
 // 引导安装HTTPS证书
 if (!AnyProxy.utils.certMgr.ifRootCAFileExists()) {
@@ -51,9 +48,12 @@ proxyServer.on('error', (e) => {
 });
 
 // 删除redis中对应缓存后再启动
-redis('del', POST_LIST_KEY, PROFILE_LIST_KEY).then(() => {
+utils.delCrawlLinkCache().then(() => {
   log('redis缓存已经清除，启动代理服务器...')
   proxyServer.start();
+}, e => {
+  console.log('Error when del redis cache');
+  console.log(e);
 });
 
 // when finished

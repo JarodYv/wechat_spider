@@ -4,6 +4,8 @@
 
 使用代理模块 AnyProxy。代码已支持 AnyProxy 4 版本。
 
+支持 Docker 部署。
+
 ## 开始
 
 ### 安装前准备
@@ -21,6 +23,23 @@ npm install
 ```
 
 本项目基于代理模块 AnyProxy，解析微信 HTTPS 请求需在电脑和手机上都安装证书。可参考：[AnyProxy 文档](http://anyproxy.io/cn/#%E8%AF%81%E4%B9%A6%E9%85%8D%E7%BD%AE)。
+
+### 通过 Docker 部署
+
+```shell
+git clone https://github.com/lqqyt2423/wechat_spider.git
+cd wechat_spider
+# build image
+docker-compose build
+# 运行实例
+docker-compose up
+# 终止运行
+docker-compose down
+```
+
+- `Dockerfile` 中已经设置了在 `Linux` 环境的 Docker 中添加根证书的操作步骤，所以接下来仅需在手机上安装 https 证书即可。
+- 最终手机上设置的代理 ip 还是需要以自己电脑上的 ip 为准，需忽略 Docker 实例中打印的 ip 地址
+- 可编辑 `Dockerfile` 和 `docker-compose.yml` 改变部署规则
 
 ## 使用
 
@@ -51,7 +70,7 @@ npm start
 
 前端页面已打包好，启动项目后，如无修改默认 `server port` 配置，浏览器直接访问 `http://localhost:8104` 即可。检测数据有无抓取保存直接刷新此页面即可。
 
-![可视化界面](posts_screenshot.png)
+![可视化界面](imgs/posts_screenshot.png)
 
 前端页面由`React` 编写，如需修改，可编辑`client` 文件中的代码。
 
@@ -77,11 +96,17 @@ mongoexport --db wechat_spider --collection posts --type=csv --fields title,link
 
 文件 `/utils/exportData.js` 已经编写好成型的导出数据的方法，直接通过 `JavaScript` 调用即可。
 
+## 抓取特定公众号历史链接的第二种方法
+
+代码写在 `second/` 文件夹中，原理是通过微信公众平台的后台编辑文章时，可以通过转载查看其它公众号的文章列表。所以使用此方法的前提是要有微信公众号的账号，然后登陆进入后台，复制对应的 `cookie` 和 `token` 信息至 `config.js` 中。
+
+经过测试，发现此方法会有频率的一些限制，且目前代码仅仅处于可以用的阶段，还需要做很多的优化，所以在此不再过多阐述。如果觉得此方法有用，可以参考 `second/` 文件夹中的代码逻辑，非常简单。
+
 ## 赞赏
 
 如本项目对你有所帮助，可扫码赞赏。
 
-![赞赏](pay.png)
+![赞赏](imgs/pay.png)
 
 ## 付费 Support
 
